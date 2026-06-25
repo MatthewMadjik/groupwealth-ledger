@@ -3,82 +3,81 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import json
 
 st.set_page_config(page_title="GroupWealth Ledger", layout="wide")
 st.title("GroupWealth Ledger")
-st.caption("Multi-household • Guided entry • Projected Ledger")
+st.caption("Multi-household cash flow • Guided entry • Projected ledger")
 
-# Database
-DB_FILE = "groupwealth_ledger.db"
+# DB
+conn = sqlite3.connect("ledger.db", check_same_thread=False)
+conn.row_factory = sqlite3.Row
 
-def get_db():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Init tables
+conn.execute('''CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, name TEXT UNIQUE)''')
+conn.execute('''CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, account_id INTEGER, type TEXT, name TEXT, amount REAL, frequency TEXT, start_date TEXT, paid_via TEXT, category TEXT, notes TEXT)''')
+conn.execute('''CREATE TABLE IF NOT EXISTS cc_details (item_id INTEGER PRIMARY KEY, statement_date TEXT, payment_date TEXT, authorized_users TEXT, balance REAL, interest_rate REAL, promo_expiration TEXT, mppo_date TEXT, bt_active INTEGER, rewards TEXT)''')
 
-def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, name TEXT UNIQUE, type TEXT, notes TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, account_id INTEGER, item_type TEXT, name TEXT, base_amount REAL, frequency TEXT, start_date TEXT, account_paid_via TEXT, category TEXT, notes TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS debt_details (item_id INTEGER PRIMARY KEY, statement_date TEXT, payment_date TEXT, authorized_users TEXT, balance REAL, interest_rate REAL, promo_expiration TEXT, mppo_final_payoff_date TEXT, balance_transfer_active INTEGER, rewards_type TEXT, min_pay_percent REAL, credit_limit REAL)''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# Sidebar
 st.sidebar.header("Accounts")
-accounts = pd.read_sql_query("SELECT * FROM accounts", get_db())
+accounts = pd.read_sql("SELECT * FROM accounts", conn)
 account_list = ["GLOBAL"] + accounts['name'].tolist() if not accounts.empty else ["GLOBAL"]
-selected = st.sidebar.selectbox("View", account_list)
+view = st.sidebar.selectbox("View", account_list)
 
-# Add Account
+# Add account
 with st.sidebar.expander("Add Account"):
-    new_name = st.text_input("Name")
+    name = st.text_input("Name")
     if st.button("Add"):
-        conn = get_db()
-        conn.execute("INSERT OR IGNORE INTO accounts (name) VALUES (?)", (new_name,))
+        conn.execute("INSERT OR IGNORE INTO accounts (name) VALUES (?)", (name,))
         conn.commit()
         st.rerun()
 
-# Tabs
-tab1, tab2, tab3 = st.tabs(["Projected Ledger", "Add Item", "Manage Items"])
+tab1, tab2, tab3 = st.tabs(["Ledger", "Add Item", "Manage"])
 
 with tab1:
     st.header("Projected Ledger")
-    st.info("Transaction list coming in next update. Add items first.")
+    st.info("Full transaction ledger coming soon. Add items first.")
 
 with tab2:
     st.header("Add New Item")
-    item_type = st.selectbox("Type", ["Recurring Bill", "Recurring Income", "Credit Card / Debt", "One-time"])
+    itype = st.selectbox("Type", ["Bill", "Income", "Credit Card"])
     
-    with st.form("add_form"):
+    with st.form("add"):
         name = st.text_input("Name*")
-        amount = st.number_input("Base Amount*", value=0.0)
-        freq = st.selectbox("Frequency", ["monthly", "bi_weekly", "every_4_weeks", "quarterly", "annual"])
-        start = st.date_input("Start Date", datetime.now())
+        amount = st.number_input("Amount*", value=0.0)
+        freq = st.selectbox("Frequency", ["monthly", "bi_weekly", "every_4_weeks", "quarterly"])
+        start = st.date_input("Start Date")
         paid_via = st.text_input("Paid Via")
         category = st.text_input("Category")
         notes = st.text_area("Notes")
         
-        if st.form_submit_button("Add"):
-            conn = get_db()
+        if itype == "Credit Card":
+            st.subheader("Credit Card Details")
+            statement_date = st.text_input("Statement Date")
+            payment_date = st.text_input("Payment Date")
+            auth_users = st.text_input("Authorized Users")
+            balance = st.number_input("Current Balance")
+            interest = st.number_input("Interest Rate", value=0.0)
+            promo = st.text_input("Promo Expiration")
+            mppo = st.text_input("MPPO Final Payoff")
+            bt = st.checkbox("Balance Transfer Active")
+            rewards = st.text_input("Rewards")
+        
+        if st.form_submit_button("Save"):
             c = conn.cursor()
-            c.execute('''INSERT INTO items (name, base_amount, frequency, start_date, account_paid_via, category, notes, item_type) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
-                      (name, amount, freq, start.strftime("%Y-%m-%d"), paid_via, category, notes, item_type))
+            c.execute("INSERT INTO items (type, name, amount, frequency, start_date, paid_via, category, notes) VALUES (?,?,?,?,?,?,?,?)",
+                      (itype, name, amount, freq, start.strftime("%Y-%m-%d"), paid_via, category, notes))
+            item_id = c.lastrowid
+            if itype == "Credit Card":
+                c.execute("INSERT INTO cc_details (item_id, statement_date, payment_date, authorized_users, balance, interest_rate, promo_expiration, mppo_date, bt_active, rewards) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                          (item_id, statement_date, payment_date, auth_users, balance, interest, promo, mppo, int(bt), rewards))
             conn.commit()
-            st.success("Added!")
+            st.success("Saved!")
             st.rerun()
 
 with tab3:
     st.header("Manage Items")
-    items = pd.read_sql_query("SELECT * FROM items", get_db())
-    if not items.empty:
-        st.dataframe(items)
-    else:
-        st.info("No items yet. Add some in the Add Item tab.")
+    items = pd.read_sql("SELECT * FROM items", conn)
+    st.dataframe(items)
+    st.info("Edit/delete coming in next update.")
 
-st.success("App updated with better CC support and Manage Items tab. Add a Credit Card and see the detailed form.")
+st.success("Detailed CC form added. Try adding a Credit Card.")
+conn.close()
